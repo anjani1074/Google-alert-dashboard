@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Market Intelligence Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+:root {
+  --bg:#0F1115; --card:#161A20; --border:#232833;
+  --text:#E6E8EB; --muted:#A3ABB8;
+  --accent:#7C9DFF; --accent-soft:rgba(124,157,255,.12);
+  --visited:#6B7280;
+}
+body.light {
+  --bg:#F4F6F9; --card:#FFF; --border:#D9DEE7;
+  --text:#0F172A; --muted:#64748B;
+  --accent:#4C6FFF; --accent-soft:rgba(76,111,255,.12);
+  --visited:#9CA3AF;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif
+}
+.container{max-width:1200px;margin:32px auto;padding:0 20px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+h1{margin:0;font-size:26px;font-weight:600}
+.subtitle{font-size:14px;color:var(--muted)}
+.theme-toggle{
+  width:36px;height:36px;border-radius:8px;
+  border:1px solid var(--border);background:var(--card);
+  cursor:pointer;font-size:18px
+}
+
+/* CONTROLS */
+.controls{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 16px;margin-bottom:20px;
+  position:relative
+}
+.controls label{font-size:13px;color:var(--muted);margin-right:8px}
+.borrower-input{
+  width:260px;padding:8px 10px;border-radius:6px;
+  background:var(--bg);color:var(--text);
+  border:1px solid var(--border);font-size:14px
+}
+.suggestions{
+  position:absolute;top:56px;left:16px;width:260px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:8px;max-height:240px;overflow-y:auto;
+  display:none;z-index:20
+}
+.suggestion{padding:8px 10px;cursor:pointer}
+.suggestion:hover,
+.suggestion.active{background:var(--accent-soft)}
+.suggestion.all{
+  font-weight:500;color:var(--muted);
+  border-bottom:1px solid var(--border)
+}
+
+/* FEED */
+.feed{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:20px 24px
+}
+.item{padding:14px 0;border-bottom:1px solid var(--border)}
+.item:last-child{border-bottom:none}
+.borrower-tag{
+  background:var(--accent-soft);color:var(--accent);
+  padding:2px 8px;border-radius:999px;
+  font-size:11px;margin-right:6px
+}
+.headline{
+  color:var(--accent);
+  text-decoration:none;
+  font-weight:500
+}
+.headline.read{
+  color:var(--visited);
+}
+.meta{font-size:12px;color:var(--muted);margin-top:4px}
+.calm{text-align:center;padding:40px 0;color:var(--muted);line-height:1.6}
+footer{text-align:right;font-size:11px;color:var(--muted);margin-top:18px}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<header>
+  <div>
+    <h1>Market Intelligence Dashboard</h1>
+    <div class="subtitle">Portfolio-level monitoring of public information</div>
+  </div>
+  <button class="theme-toggle" id="themeBtn">☀️</button>
+</header>
+
+<div class="controls">
+  <label>Borrower</label>
+  <input id="borrowerInput" class="borrower-input"
+         placeholder="Search or select borrower…"
+         autocomplete="off">
+  <div id="suggestions" class="suggestions"></div>
+</div>
+
+<div id="feed" class="feed">Loading alerts…</div>
+
+<footer>All timestamps in IST • Public sources only</footer>
+</div>
+
+<script>
+/* CONFIG */
+const SHEET_ID = "1JiRAcNwhDdDofHVbhD4BC9_nx3C26wgtQeumpHEKyy8";
+const SHEET_TAB = "Sheet1";
+const SHEET_URL = `https://opensheet.elk.sh/${SHEET_ID}/${SHEET_TAB}`;
+const RSS_PROXY = url =>
+  `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+
+/* STATE */
+let borrowers=[], allItems=[], activeBorrower="", activeIndex=-1;
+const readKey = "read_links_v1";
+const readLinks = new Set(JSON.parse(localStorage.getItem(readKey) || "[]"));
+
+/* UTIL */
+const qs=id=>document.getElementById(id);
+function toIST(d){
+  return new Date(d).toLocaleDateString("en-IN",{
+    timeZone:"Asia/Kolkata",day:"2-digit",month:"short",year:"numeric"
+  });
+}
+
+/* THEME */
+function applyTheme(){
+  qs("themeBtn").textContent =
+    document.body.classList.contains("light")?"🌙":"☀️";
+}
+qs("themeBtn").onclick=()=>{
+  document.body.classList.toggle("light");
+  localStorage.setItem("theme",
+    document.body.classList.contains("light")?"light":"dark");
+  applyTheme();
+};
+if(localStorage.getItem("theme")==="light") document.body.classList.add("light");
+applyTheme();
+
+/* DATA */
+function normalizeRow(r){
+  return {
+    name:(r.Borrower||r["Borrower Name"]||"").trim(),
+    rss:(r.RSS_URL||r["RSS URL"]||"").trim()
+  };
+}
+async function loadData(){
+  const rows = await (await fetch(SHEET_URL)).json();
+  borrowers = rows.map(normalizeRow).filter(r=>r.name&&r.rss);
+
+  for(const b of borrowers){
+    try{
+      const rss = await (await fetch(RSS_PROXY(b.rss))).json();
+      rss.items?.forEach(it=>{
+        allItems.push({
+          borrower:b.name,title:it.title,link:it.link,date:it.pubDate
+        });
+      });
+    }catch{}
+  }
+  renderFeed();
+}
+
+/* READ TRACKING */
+function markRead(url){
+  readLinks.add(url);
+  localStorage.setItem(readKey, JSON.stringify([...readLinks]));
+}
+
+/* SEARCH + DROPDOWN + KEYBOARD */
+const input=qs("borrowerInput"), box=qs("suggestions");
+function showSuggestions(f=""){
+  box.innerHTML=""; activeIndex=-1;
+  const list=[{label:"All borrowers",value:""}];
+  borrowers.map(b=>b.name).filter(n=>n.toLowerCase().includes(f))
+    .forEach(n=>list.push({label:n,value:n}));
+
+  list.forEach((it,i)=>{
+    const d=document.createElement("div");
+    d.className="suggestion"+(i===0?" all":"");
+    d.textContent=it.label;
+    d.onclick=()=>selectBorrower(it.value);
+    box.appendChild(d);
+  });
+  box.style.display="block";
+}
+function selectBorrower(v){
+  activeBorrower=v; input.value=v; box.style.display="none"; renderFeed();
+}
+input.onfocus=()=>showSuggestions("");
+input.oninput=()=>showSuggestions(input.value.toLowerCase());
+input.onkeydown=e=>{
+  const items=box.querySelectorAll(".suggestion");
+  if(!items.length) return;
+  if(e.key==="ArrowDown"){e.preventDefault();activeIndex=(activeIndex+1)%items.length}
+  else if(e.key==="ArrowUp"){e.preventDefault();activeIndex=(activeIndex-1+items.length)%items.length}
+  else if(e.key==="Enter"){e.preventDefault(); if(activeIndex>=0) items[activeIndex].click(); return;}
+  else if(e.key==="Escape"){box.style.display="none"; return;}
+  items.forEach(i=>i.classList.remove("active"));
+  if(activeIndex>=0){
+    items[activeIndex].classList.add("active");
+    items[activeIndex].scrollIntoView({block:"nearest"});
+  }
+};
+document.onclick=e=>{if(!e.target.closest(".controls")) box.style.display="none"};
+
+/* RENDER */
+function renderFeed(){
+  const feed=qs("feed");
+  const items=allItems.filter(i=>!activeBorrower||i.borrower===activeBorrower)
+    .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  if(items.length){
+    feed.innerHTML=items.map(i=>`
+      <div class="item">
+        <span class="borrower-tag">${i.borrower}</span>
+        <a class="headline ${readLinks.has(i.link)?"read":""}"
+           href="${i.link}" target="_blank"
+           onclick="markRead('${i.link}')">${i.title}</a>
+        <div class="meta">${toIST(i.date)}</div>
+      </div>`).join("");
+    return;
+  }
+
+  if(activeBorrower){
+    const h=allItems.filter(i=>i.borrower===activeBorrower)
+      .sort((a,b)=>new Date(b.date)-new Date(a.date));
+    feed.innerHTML=h.length
+      ? `<div class="calm">Last public news: <strong>${toIST(h[0].date)}</strong><br>Monitoring remains active</div>`
+      : `<div class="calm">No public news recorded yet<br>Monitoring remains active</div>`;
+    return;
+  }
+
+  feed.innerHTML=`<div class="calm">✓ No material public news detected<br>Monitoring remains active</div>`;
+}
+
+loadData();
+</script>
+</body>
+</html>
